@@ -7,6 +7,7 @@
     <title>智能销售管理系统</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/whatwg-fetch/3.6.2/fetch.min.js"></script>
     <style>
         :root {
             --bg-color: #ffffff;
@@ -584,8 +585,111 @@
         let returnCart = [];
         let currentCustomerBalance = 0;
 
+        // 飞书相关配置
+        const appId = 'cli_a75824bf6bb5d01c';
+        const appSecret = 'LdbJPx4xruXENCRS1k0y8dJsP58GX2so';
+        const documentId = 'your_document_id'; // 替换为实际的飞书云文档 ID
+
+        // 获取飞书访问令牌
+        async function getAccessToken() {
+            const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    app_id: appId,
+                    app_secret: appSecret
+                })
+            });
+            const data = await response.json();
+            if (data.code === 0) {
+                return data.tenant_access_token;
+            } else {
+                console.error('获取访问令牌失败:', data.msg);
+                return null;
+            }
+        }
+
+        // 保存数据到飞书云文档
+        async function saveDataToFeishu() {
+            const accessToken = await getAccessToken();
+            if (!accessToken) return;
+            const dataToSave = {
+                products: db.products,
+                customers: db.customers,
+                orders: db.orders,
+                settlements: db.settlements,
+                productCategories: db.productCategories
+            };
+            const response = await fetch(`https://open.feishu.cn/open-apis/docs/v1/documents/${documentId}/content`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${accessToken}`
+                },
+                body: JSON.stringify(dataToSave)
+            });
+            const result = await response.json();
+            if (result.code === 0) {
+                refreshAll();
+                refreshSalesRecords();
+            } else {
+                console.error('保存数据到飞书失败:', result.msg);
+            }
+        }
+
+        // 从飞书云文档加载数据
+        async function loadDataFromFeishu() {
+            const accessToken = await getAccessToken();
+            if (!accessToken) return;
+            const response = await fetch(`https://open.feishu.cn/open-apis/docs/v1/documents/${documentId}/content`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            const data = await response.json();
+            if (data.code === 0) {
+                const savedData = data.data;
+                db.products = savedData.products || [];
+                db.customers = savedData.customers || [];
+                db.orders = savedData.orders || [];
+                db.settlements = savedData.settlements || [];
+                db.productCategories = savedData.productCategories || [];
+            }
+        }
+
+        // 检查飞书云文档数据变化
+        async function checkDataChanges() {
+            const accessToken = await getAccessToken();
+            if (!accessToken) return;
+            const currentData = {
+                products: db.products,
+                customers: db.customers,
+                orders: db.orders,
+                settlements: db.settlements,
+                productCategories: db.productCategories
+            };
+            const response = await fetch(`https://open.feishu.cn/open-apis/docs/v1/documents/${documentId}/content`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+            const newData = await response.json();
+            if (newData.code === 0 && JSON.stringify(newData.data) !== JSON.stringify(currentData)) {
+                db.products = newData.data.products || [];
+                db.customers = newData.data.customers || [];
+                db.orders = newData.data.orders || [];
+                db.settlements = newData.data.settlements || [];
+                db.productCategories = newData.data.productCategories || [];
+                refreshAll();
+                refreshSalesRecords();
+            }
+        }
+
         // 初始化
-        function init() {
+        async function init() {
+            await loadDataFromFeishu();
             refreshProducts();
             refreshCustomers();
             refreshProductCategories();
@@ -645,15 +749,12 @@
             });
 
             refreshSalesRecords();
+            setInterval(checkDataChanges, 60000); // 每分钟检查一次数据变化
         }
 
         // 增强保存功能
-        function saveData() {
-            localStorage.setItem('products', JSON.stringify(db.products));
-            localStorage.setItem('customers', JSON.stringify(db.customers));
-            localStorage.setItem('orders', JSON.stringify(db.orders));
-            localStorage.setItem('settlements', JSON.stringify(db.settlements));
-            localStorage.setItem('productCategories', JSON.stringify(db.productCategories));
+        async function saveData() {
+            await saveDataToFeishu();
             refreshAll();
             refreshSalesRecords();
         }
@@ -1586,7 +1687,7 @@
                     productCategories: []
                 };
                 localStorage.clear();
-                refreshAll();
+                saveData();
                 alert('所有数据已清空！');
             }
         }
